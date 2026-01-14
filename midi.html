@@ -283,10 +283,13 @@ document.getElementById('btn-init-audio').addEventListener('click', async () => 
 window.addEventListener('resize', resizeCanvas);
 
 function resizeCanvas() {
-    state.canvasWidth = document.getElementById('game-container').offsetWidth;
-    state.canvasHeight = document.getElementById('game-container').offsetHeight;
-    canvas.width = state.canvasWidth;
-    canvas.height = state.canvasHeight;
+    const container = document.getElementById('game-container');
+    if (container) {
+        state.canvasWidth = container.offsetWidth;
+        state.canvasHeight = container.offsetHeight;
+        canvas.width = state.canvasWidth;
+        canvas.height = state.canvasHeight;
+    }
 }
 
 /**
@@ -374,7 +377,7 @@ async function loadMidiFile(file) {
         
         state.midiData = midi;
         state.bpm = midi.header.tempos[0]?.bpm || 120;
-        state.ppq = midi.header.ppq;
+        state.ppq = midi.header.ppq || 480;
         state.duration = midi.durationTicks;
         state.currentTick = 0;
         
@@ -382,24 +385,40 @@ async function loadMidiFile(file) {
         state.allNotes = [];
         midi.tracks.forEach(track => {
             track.notes.forEach(note => {
+                // Robust tick calculation
+                let startTick = note.ticks;
+                let durationTicks = note.durationTicks;
+                
+                // Fallback for some parsers that might not populate ticks directly
+                if (startTick === undefined || startTick === null) {
+                    // Estimate from time
+                    const secondsPerTick = 60 / (state.bpm * state.ppq);
+                    startTick = note.time / secondsPerTick;
+                    durationTicks = note.duration / secondsPerTick;
+                }
+
                 state.allNotes.push({
                     note: note.midi,
-                    startTick: midi.durationTicks * (note.time / midi.duration), // Approximate tick conversion
-                    durationTicks: midi.durationTicks * (note.duration / midi.duration),
+                    startTick: Math.floor(startTick),
+                    durationTicks: Math.floor(durationTicks),
                     name: note.name,
                     velocity: note.velocity,
-                    played: false // For game logic
+                    played: false 
                 });
             });
         });
+        
+        // Sort notes by start time for better performance/logic
+        state.allNotes.sort((a, b) => a.startTick - b.startTick);
 
         // Reset controls
         state.isPlaying = false;
         updatePlayButton();
         overlay.style.display = 'none';
+        
     } catch (e) {
         console.error("Error parsing MIDI", e);
-        alert("Failed to parse MIDI file. Ensure it is a valid .mid file.");
+        alert("Failed to parse MIDI file. Check console for details.");
     }
 }
 
@@ -466,76 +485,85 @@ document.getElementById('speed-slider').addEventListener('input', (e) => {
 let lastTime = 0;
 
 function gameLoop(time) {
+    requestAnimationFrame(gameLoop);
+
     if (!lastTime) lastTime = time;
     const delta = (time - lastTime) / 1000; // Seconds
     lastTime = time;
 
     // Logic Update
     if (state.isPlaying && state.midiData) {
-        let canAdvance = true;
-        
-        // Calculate advance based on BPM/PPQ
-        // Ticks per second = (BPM * PPQ) / 60
-        const ticksPerSecond = (state.bpm * state.ppq) / 60;
-        const tickAdvance = ticksPerSecond * delta * state.playbackSpeed;
+        try {
+            let canAdvance = true;
+            
+            // Calculate advance based on BPM/PPQ
+            let ticksPerSecond = (state.bpm * state.ppq) / 60;
+            if (!ticksPerSecond || ticksPerSecond <= 0) ticksPerSecond = 1000; // Safety fallback
+            
+            const tickAdvance = ticksPerSecond * delta * state.playbackSpeed;
 
-        // WAIT MODE LOGIC
-        if (state.waitMode) {
-            // Check notes arriving soon
-            const tolerance = 50; 
-            const notesAtCurrentTime = state.allNotes.filter(n => 
-                n.startTick >= state.currentTick && 
-                n.startTick < state.currentTick + tickAdvance + tolerance &&
-                !n.played
-            );
+            // WAIT MODE LOGIC
+            if (state.waitMode) {
+                // Check notes arriving soon
+                const tolerance = 50; 
+                const notesAtCurrentTime = state.allNotes.filter(n => 
+                    n.startTick >= state.currentTick && 
+                    n.startTick < state.currentTick + tickAdvance + tolerance &&
+                    !n.played
+                );
 
-            if (notesAtCurrentTime.length > 0) {
-                // Determine earliest start time in this group
-                const nextNoteTick = Math.min(...notesAtCurrentTime.map(n => n.startTick));
-                
-                // If we are basically AT that time
-                if (state.currentTick >= nextNoteTick - 10) {
-                    const requiredNotes = notesAtCurrentTime.filter(n => Math.abs(n.startTick - nextNoteTick) < 10);
+                if (notesAtCurrentTime.length > 0) {
+                    // Determine earliest start time in this group
+                    const nextNoteTick = Math.min(...notesAtCurrentTime.map(n => n.startTick));
                     
-                    // Check if user is holding required notes
-                    const allPressed = requiredNotes.every(n => state.activeNotes.has(n.note));
-                    
-                    if (!allPressed) {
-                        canAdvance = false;
-                        state.currentTick = nextNoteTick; 
-                    } else {
-                         // Mark valid notes as played to avoid re-triggering logic immediately
-                         requiredNotes.forEach(n => n.played = true);
+                    // If we are basically AT that time
+                    if (state.currentTick >= nextNoteTick - 10) {
+                        const requiredNotes = notesAtCurrentTime.filter(n => Math.abs(n.startTick - nextNoteTick) < 10);
+                        
+                        // Check if user is holding required notes
+                        const allPressed = requiredNotes.every(n => state.activeNotes.has(n.note));
+                        
+                        if (!allPressed) {
+                            canAdvance = false;
+                            state.currentTick = nextNoteTick; 
+                        } else {
+                             // Mark valid notes as played
+                             requiredNotes.forEach(n => n.played = true);
+                        }
                     }
                 }
             }
-        }
 
-        if (canAdvance) {
-            state.currentTick += tickAdvance;
-            
-            // Audio Playback
-            state.allNotes.forEach(n => {
-                // If note started in this frame
-                if (n.startTick <= state.currentTick && n.startTick > state.currentTick - tickAdvance) {
-                    // Trigger sound if playing normally
-                    // In Wait Mode, if we just passed the check, the user played it, so we might not want to double play?
-                    // Actually, usually app plays backing tracks, user plays melody.
-                    // For simplicity, we play everything unless muted.
-                    if(state.synth && !state.waitMode) {
-                        const durSeconds = (n.durationTicks / ticksPerSecond);
-                        state.synth.triggerAttackRelease(
-                            Tone.Frequency(n.note, "midi").toNote(), 
-                            durSeconds
-                        );
+            if (canAdvance) {
+                state.currentTick += tickAdvance;
+                
+                // Audio Playback
+                // Optimization: Don't iterate all notes, just recent ones. 
+                // But for <10000 notes simple iteration is usually fine on desktop.
+                // We add a check to ensure note range is valid.
+                state.allNotes.forEach(n => {
+                    // If note started in this frame
+                    if (n.startTick <= state.currentTick && n.startTick > state.currentTick - tickAdvance) {
+                        if(state.synth && !state.waitMode) {
+                            const durSeconds = (n.durationTicks / ticksPerSecond);
+                            // Safety check for valid MIDI note
+                            if (n.note >= 0 && n.note <= 127) {
+                                state.synth.triggerAttackRelease(
+                                    Tone.Frequency(n.note, "midi").toNote(), 
+                                    Math.max(0.1, durSeconds) // Ensure min duration
+                                );
+                            }
+                        }
                     }
-                }
-            });
+                });
+            }
+        } catch (err) {
+            console.error("Game loop error:", err);
+            // Don't crash the loop, just log
         }
     }
 
     draw();
-    requestAnimationFrame(gameLoop);
 }
 
 
@@ -558,7 +586,9 @@ function draw() {
     const visualizerHeight = state.canvasHeight - pianoHeight;
     
     // Scale
-    const ticksPerSecond = (state.bpm * state.ppq) / 60;
+    let ticksPerSecond = (state.bpm * state.ppq) / 60;
+    if (!ticksPerSecond || ticksPerSecond <= 0) ticksPerSecond = 1000;
+
     const viewDurationTicks = ticksPerSecond * 4; // 4 seconds visible
     const pixelsPerTick = visualizerHeight / viewDurationTicks;
 
