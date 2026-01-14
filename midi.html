@@ -550,8 +550,11 @@ function gameLoop(time) {
     requestAnimationFrame(gameLoop);
 
     if (!lastTime) lastTime = time;
-    const delta = (time - lastTime) / 1000; // Seconds
+    let delta = (time - lastTime) / 1000; // Seconds
     lastTime = time;
+    
+    // Safety cap for delta (prevents huge jumps after tab switching)
+    if (delta > 0.1) delta = 0.1;
 
     // Logic Update
     if (state.isPlaying && state.midiData) {
@@ -560,7 +563,7 @@ function gameLoop(time) {
             
             // Calculate advance based on BPM/PPQ
             let ticksPerSecond = (state.bpm * state.ppq) / 60;
-            if (!ticksPerSecond || ticksPerSecond <= 0) ticksPerSecond = 1000; // Safety fallback
+            if (!ticksPerSecond || ticksPerSecond <= 0) ticksPerSecond = 1000; 
             
             const tickAdvance = ticksPerSecond * delta * state.playbackSpeed;
 
@@ -600,9 +603,6 @@ function gameLoop(time) {
                 state.currentTick += tickAdvance;
                 
                 // Audio Playback
-                // Optimization: Don't iterate all notes, just recent ones. 
-                // But for <10000 notes simple iteration is usually fine on desktop.
-                // We add a check to ensure note range is valid.
                 state.allNotes.forEach(n => {
                     // If note started in this frame
                     if (n.startTick <= state.currentTick && n.startTick > state.currentTick - tickAdvance) {
@@ -612,7 +612,7 @@ function gameLoop(time) {
                             if (n.note >= 0 && n.note <= 127) {
                                 state.synth.triggerAttackRelease(
                                     Tone.Frequency(n.note, "midi").toNote(), 
-                                    Math.max(0.1, durSeconds) // Ensure min duration
+                                    Math.max(0.1, durSeconds)
                                 );
                             }
                         }
@@ -621,7 +621,6 @@ function gameLoop(time) {
             }
         } catch (err) {
             console.error("Game loop error:", err);
-            // Don't crash the loop, just log
         }
     }
 
@@ -630,7 +629,13 @@ function gameLoop(time) {
 
 
 function draw() {
-    // Clear background
+    // 1. Safety Checks
+    if (canvas.width === 0 || canvas.height === 0) {
+        resizeCanvas();
+        if (canvas.width === 0) return; // Still 0? Abort.
+    }
+
+    // 2. Clear background
     ctx.fillStyle = '#121212';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -642,7 +647,7 @@ function draw() {
         return;
     }
 
-    // Drawing Metrics
+    // 3. Setup Metrics
     const keyWidth = state.canvasWidth / KEY_COUNT;
     const pianoHeight = state.canvasHeight * 0.2; 
     const visualizerHeight = state.canvasHeight - pianoHeight;
@@ -654,37 +659,7 @@ function draw() {
     const viewDurationTicks = ticksPerSecond * 4; // 4 seconds visible
     const pixelsPerTick = visualizerHeight / viewDurationTicks;
 
-    if (state.allNotes) {
-        state.allNotes.forEach(note => {
-            const distFromTarget = note.startTick - state.currentTick;
-            const y = visualizerHeight - (distFromTarget * pixelsPerTick);
-            const height = note.durationTicks * pixelsPerTick;
-
-            // Only draw if on screen
-            if (y + height > 0 && y < visualizerHeight) {
-                const x = (note.note - MIN_NOTE) * keyWidth;
-                
-                // Color Logic
-                let color = '#bb86fc'; // Default
-                const isHit = state.activeNotes.has(note.note) && Math.abs(distFromTarget) < 200; 
-                
-                if (isHit) color = '#03dac6'; 
-                if (state.waitMode && distFromTarget < 50 && distFromTarget > -10 && !isHit) {
-                    color = '#cf6679'; // Alert color
-                }
-
-                ctx.fillStyle = color;
-                ctx.strokeStyle = '#000';
-                ctx.lineWidth = 1;
-                
-                // Draw note
-                ctx.fillRect(x + 1, y - height, keyWidth - 2, height);
-                ctx.strokeRect(x + 1, y - height, keyWidth - 2, height);
-            }
-        });
-    }
-
-    // 2. Draw Piano Keys
+    // 4. Draw Piano Keys (Background) - DRAWN FIRST to prevent black screen if notes crash
     for (let i = MIN_NOTE; i <= MAX_NOTE; i++) {
         const x = (i - MIN_NOTE) * keyWidth;
         const isActive = state.activeNotes.has(i);
@@ -704,13 +679,51 @@ function draw() {
         }
     }
 
-    // 3. Draw "Now" Line
+    // 5. Draw "Now" Line
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(0, visualizerHeight);
     ctx.lineTo(state.canvasWidth, visualizerHeight);
     ctx.stroke();
+
+    // 6. Draw Falling Notes
+    if (state.allNotes) {
+        try {
+            state.allNotes.forEach(note => {
+                const distFromTarget = note.startTick - state.currentTick;
+                const y = visualizerHeight - (distFromTarget * pixelsPerTick);
+                const height = note.durationTicks * pixelsPerTick;
+
+                // Robustness: Ensure numbers are valid
+                if (!Number.isFinite(y) || !Number.isFinite(height)) return;
+
+                // Optimization: Only draw if near screen
+                if (y < visualizerHeight && y + height > -50) {
+                    const x = (note.note - MIN_NOTE) * keyWidth;
+                    
+                    // Color Logic
+                    let color = '#bb86fc'; // Default
+                    const isHit = state.activeNotes.has(note.note) && Math.abs(distFromTarget) < 200; 
+                    
+                    if (isHit) color = '#03dac6'; 
+                    if (state.waitMode && distFromTarget < 50 && distFromTarget > -10 && !isHit) {
+                        color = '#cf6679'; // Alert color
+                    }
+
+                    ctx.fillStyle = color;
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 1;
+                    
+                    ctx.fillRect(x + 1, y - height, keyWidth - 2, height);
+                    ctx.strokeRect(x + 1, y - height, keyWidth - 2, height);
+                }
+            });
+        } catch (e) {
+            // Suppress error so we at least see the keys
+            // console.warn("Drawing error", e);
+        }
+    }
 }
 </script>
 </body>
