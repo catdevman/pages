@@ -621,6 +621,9 @@ function gameLoop(time) {
             }
         } catch (err) {
             console.error("Game loop error:", err);
+            state.isPlaying = false;
+            updatePlayButton();
+            showToast(`⚠️ Playback Error:\n${err.message}`, 'error');
         }
     }
 
