@@ -285,6 +285,10 @@ const state = {
     canvasHeight: 0,
     canvasWidth: 0,
     
+    // Debug
+    frameCount: 0,
+    lastDebugTime: 0,
+    
     // Synth
     synth: null
 };
@@ -548,6 +552,8 @@ let lastTime = 0;
 
 function gameLoop(time) {
     requestAnimationFrame(gameLoop);
+    
+    state.frameCount++;
 
     if (!lastTime) lastTime = time;
     let delta = (time - lastTime) / 1000; // Seconds
@@ -555,6 +561,14 @@ function gameLoop(time) {
     
     // Safety cap for delta (prevents huge jumps after tab switching)
     if (delta > 0.1) delta = 0.1;
+
+    // Debug Logger (Every 1s)
+    if (time - state.lastDebugTime > 1000) {
+        state.lastDebugTime = time;
+        if(state.isPlaying) {
+            console.log(`Tick: ${Math.round(state.currentTick)} | Delta: ${delta.toFixed(4)}`);
+        }
+    }
 
     // Logic Update
     if (state.isPlaying && state.midiData) {
@@ -727,6 +741,18 @@ function draw() {
             // console.warn("Drawing error", e);
         }
     }
+
+    // 7. DEBUG HUD (Added per request)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(10, 10, 200, 120);
+    ctx.fillStyle = '#0f0';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Frame: ${state.frameCount}`, 20, 30);
+    ctx.fillText(`Tick: ${Math.floor(state.currentTick)}`, 20, 50);
+    ctx.fillText(`Notes: ${state.allNotes ? state.allNotes.length : 0}`, 20, 70);
+    ctx.fillText(`State: ${state.isPlaying ? 'PLAYING' : 'PAUSED'}`, 20, 90);
+    ctx.fillText(`Canvas: ${canvas.width}x${canvas.height}`, 20, 110);
 }
 </script>
 </body>
