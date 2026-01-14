@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIDI Piano Trainer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <script src="https://unpkg.com/@tonejs/midi"></script>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --surface-color: #1e1e1e;
+            --primary-color: #bb86fc;
+            --secondary-color: #03dac6;
+            --error-color: #cf6679;
+            --text-color: #ffffff;
+            --key-white: #f0f0f0;
+            --key-black: #121212;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Controls Header */
+        header {
+            background-color: var(--surface-color);
+            padding: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+
+        .controls-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.2rem;
+            color: var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        button, label.btn {
+            background-color: #333;
+            border: 1px solid #444;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        button:hover, label.btn:hover {
+            background-color: #444;
+            border-color: var(--primary-color);
+        }
+
+        button.active {
+            background-color: var(--primary-color);
+            color: black;
+            font-weight: bold;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .status-badge {
+            font-size: 0.8rem;
+            padding: 4px 8px;
+            border-radius: 12px;
+            background: #333;
+            color: #aaa;
+        }
+        .status-badge.connected {
+            background: var(--secondary-color);
+            color: black;
+        }
+
+        /* Main Game Area */
+        #game-container {
+            flex: 1;
+            position: relative;
+            background: #000;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Loading Overlay */
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+            backdrop-filter: blur(5px);
+        }
+
+        .welcome-box {
+            background: var(--surface-color);
+            padding: 2rem;
+            border-radius: 8px;
+            text-align: center;
+            max-width: 500px;
+            border: 1px solid #333;
+        }
+
+        .welcome-box h2 {
+            margin-top: 0;
+            color: var(--primary-color);
+        }
+
+        .drop-zone {
+            border: 2px dashed #444;
+            padding: 2rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+            transition: border-color 0.2s;
+        }
+        .drop-zone.dragover {
+            border-color: var(--secondary-color);
+            background: rgba(3, 218, 198, 0.1);
+        }
+
+        /* Virtual Piano at bottom */
+        #piano-container {
+            height: 120px;
+            width: 100%;
+            background: #111;
+            display: flex;
+            justify-content: center;
+            position: relative;
+            border-top: 4px solid var(--primary-color);
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="controls-group">
+        <h1>🎹 MIDI Trainer</h1>
+        <div id="midi-status" class="status-badge">No MIDI Device</div>
+    </div>
+
+    <div class="controls-group">
+        <label class="btn" for="file-input">📂 Load MIDI</label>
+        <input type="file" id="file-input" accept=".mid,.midi">
+        
+        <button id="btn-play">▶ Play</button>
+        <button id="btn-pause" style="display:none;">⏸ Pause</button>
+        <button id="btn-reset">⏮ Reset</button>
+        
+        <div style="border-left: 1px solid #444; height: 20px; margin: 0 5px;"></div>
+        
+        <button id="btn-mode-wait" title="Pauses song until you hit the right notes">Wait Mode: OFF</button>
+        <button id="btn-mute-my-play" title="Mute local synthesis so you can hear your own piano">Local Sound: ON</button>
+    </div>
+
+    <div class="controls-group">
+        <span>Speed: <span id="speed-val">100%</span></span>
+        <input type="range" id="speed-slider" min="0.25" max="2" step="0.25" value="1" style="width: 80px;">
+    </div>
+</header>
+
+<div id="game-container">
+    <canvas id="visualizer"></canvas>
+    <div id="overlay">
+        <div class="welcome-box">
+            <h2>Start Learning</h2>
+            <p>Connect your MIDI keyboard and load a song to begin.</p>
+            <button id="btn-init-audio" style="font-size: 1.2rem; padding: 1rem 2rem; background: var(--secondary-color); color: black; border:none; font-weight: bold;">
+                Start Audio Engine
+            </button>
+            <div class="drop-zone" id="drop-zone">
+                Or drag & drop a .mid file here
+            </div>
+            <p style="font-size: 0.8rem; color: #888;">Note: Web MIDI API works best in Chrome/Edge.</p>
+        </div>
+    </div>
+</div>
+
+<script>
+/**
+ * Application State
+ */
+const state = {
+    isPlaying: false,
+    isAudioStarted: false,
+    midiAccess: null,
+    midiInput: null,
+    
+    // Song Data
+    midiData: null,
+    currentTick: 0,
+    bpm: 120,
+    ppq: 480, // Pulses per quarter note (ticks)
+    duration: 0,
+    allNotes: [],
+    
+    // Playback Settings
+    playbackSpeed: 1,
+    waitMode: false,
+    muteLocal: false,
+    
+    // Live Input State
+    activeNotes: new Set(), // Notes currently held by user
+    notesToPlay: [],        // Notes that should be played right now (for Wait Mode)
+    
+    // Viewport
+    scrollSpeedPixelsPerTick: 0.1, // Adjusted based on BPM later
+    canvasHeight: 0,
+    canvasWidth: 0,
+    
+    // Synth
+    synth: null
+};
+
+// Key configuration (Full 88 keys)
+const MIN_NOTE = 21; // A0
+const MAX_NOTE = 108; // C8
+const KEY_COUNT = MAX_NOTE - MIN_NOTE + 1;
+
+/**
+ * Initialization
+ */
+const canvas = document.getElementById('visualizer');
+const ctx = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+const midiStatus = document.getElementById('midi-status');
+
+// Init Tone.js
+document.getElementById('btn-init-audio').addEventListener('click', async () => {
+    await Tone.start();
+    
+    // Create a PolySynth for playback
+    state.synth = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: "triangle" },
+        envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 1 }
+    }).toDestination();
+    state.synth.volume.value = -10;
+
+    state.isAudioStarted = true;
+    overlay.style.display = 'none';
+    requestMIDIAccess();
+    resizeCanvas();
+    gameLoop(0);
+});
+
+// Window Resize
+window.addEventListener('resize', resizeCanvas);
+
+function resizeCanvas() {
+    state.canvasWidth = document.getElementById('game-container').offsetWidth;
+    state.canvasHeight = document.getElementById('game-container').offsetHeight;
+    canvas.width = state.canvasWidth;
+    canvas.height = state.canvasHeight;
+}
+
+/**
+ * MIDI Access
+ */
+function requestMIDIAccess() {
+    if (navigator.requestMIDIAccess) {
+        navigator.requestMIDIAccess().then(onMIDISuccess, onMIDIFailure);
+    } else {
+        midiStatus.innerText = "Web MIDI not supported";
+    }
+}
+
+function onMIDISuccess(midi) {
+    state.midiAccess = midi;
+    updateMidiInputs();
+    midi.onstatechange = updateMidiInputs;
+}
+
+function updateMidiInputs() {
+    const inputs = state.midiAccess.inputs.values();
+    let isConnected = false;
+    
+    for (let input of inputs) {
+        input.onmidimessage = onMIDIMessage;
+        isConnected = true;
+        // Just grab the first one for now
+        state.midiInput = input; 
+        midiStatus.innerText = `Connected: ${input.name}`;
+        midiStatus.classList.add('connected');
+    }
+
+    if (!isConnected) {
+        midiStatus.innerText = "No MIDI Device";
+        midiStatus.classList.remove('connected');
+    }
+}
+
+function onMIDIFailure() {
+    midiStatus.innerText = "MIDI Access Failed";
+}
+
+function onMIDIMessage(event) {
+    const [command, note, velocity] = event.data;
+    const cmd = command >> 4;
+    
+    if (cmd === 9 && velocity > 0) { // Note On
+        if (!state.activeNotes.has(note)) {
+            state.activeNotes.add(note);
+            // Play sound for user input if enabled
+            if (!state.muteLocal && state.synth) {
+                state.synth.triggerAttack(Tone.Frequency(note, "midi").toNote(), Tone.now(), velocity/127);
+            }
+        }
+    } else if (cmd === 8 || (cmd === 9 && velocity === 0)) { // Note Off
+        if (state.activeNotes.has(note)) {
+            state.activeNotes.delete(note);
+            if (!state.muteLocal && state.synth) {
+                state.synth.triggerRelease(Tone.Frequency(note, "midi").toNote());
+            }
+        }
+    }
+}
+
+/**
+ * File Loading
+ */
+document.getElementById('file-input').addEventListener('change', (e) => loadMidiFile(e.target.files[0]));
+const dropZone = document.getElementById('drop-zone');
+
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); });
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    if(e.dataTransfer.files.length) loadMidiFile(e.dataTransfer.files[0]);
+});
+
+async function loadMidiFile(file) {
+    if (!file) return;
+    
+    try {
+        const arrayBuffer = await file.arrayBuffer();
+        const midi = new Midi(arrayBuffer);
+        
+        state.midiData = midi;
+        state.bpm = midi.header.tempos[0]?.bpm || 120;
+        state.ppq = midi.header.ppq;
+        state.duration = midi.durationTicks;
+        state.currentTick = 0;
+        
+        // Flatten all notes
+        state.allNotes = [];
+        midi.tracks.forEach(track => {
+            track.notes.forEach(note => {
+                state.allNotes.push({
+                    note: note.midi,
+                    startTick: midi.durationTicks * (note.time / midi.duration), // Approximate tick conversion
+                    durationTicks: midi.durationTicks * (note.duration / midi.duration),
+                    name: note.name,
+                    velocity: note.velocity,
+                    played: false // For game logic
+                });
+            });
+        });
+
+        // Reset controls
+        state.isPlaying = false;
+        updatePlayButton();
+        overlay.style.display = 'none';
+    } catch (e) {
+        console.error("Error parsing MIDI", e);
+        alert("Failed to parse MIDI file. Ensure it is a valid .mid file.");
+    }
+}
+
+/**
+ * Controls
+ */
+const btnPlay = document.getElementById('btn-play');
+const btnPause = document.getElementById('btn-pause');
+
+function togglePlay() {
+    if(!state.midiData) return;
+    state.isPlaying = !state.isPlaying;
+    
+    if (state.isPlaying) {
+        lastTime = performance.now();
+    } else {
+        if(state.synth) state.synth.releaseAll();
+    }
+    updatePlayButton();
+}
+
+function updatePlayButton() {
+    if(state.isPlaying) {
+        btnPlay.style.display = 'none';
+        btnPause.style.display = 'inline-flex';
+    } else {
+        btnPlay.style.display = 'inline-flex';
+        btnPause.style.display = 'none';
+    }
+}
+
+document.getElementById('btn-play').addEventListener('click', togglePlay);
+document.getElementById('btn-pause').addEventListener('click', togglePlay);
+
+document.getElementById('btn-reset').addEventListener('click', () => {
+    state.currentTick = 0;
+    state.isPlaying = false;
+    // Reset played status
+    if(state.allNotes) state.allNotes.forEach(n => n.played = false);
+    if(state.synth) state.synth.releaseAll();
+    updatePlayButton();
+});
+
+document.getElementById('btn-mode-wait').addEventListener('click', (e) => {
+    state.waitMode = !state.waitMode;
+    e.target.innerText = `Wait Mode: ${state.waitMode ? 'ON' : 'OFF'}`;
+    e.target.classList.toggle('active', state.waitMode);
+});
+
+document.getElementById('btn-mute-my-play').addEventListener('click', (e) => {
+    state.muteLocal = !state.muteLocal;
+    e.target.innerText = `Local Sound: ${!state.muteLocal ? 'ON' : 'OFF'}`;
+});
+
+document.getElementById('speed-slider').addEventListener('input', (e) => {
+    state.playbackSpeed = parseFloat(e.target.value);
+    document.getElementById('speed-val').innerText = `${Math.round(state.playbackSpeed * 100)}%`;
+});
+
+
+/**
+ * Core Game Loop
+ */
+let lastTime = 0;
+
+function gameLoop(time) {
+    if (!lastTime) lastTime = time;
+    const delta = (time - lastTime) / 1000; // Seconds
+    lastTime = time;
+
+    // Logic Update
+    if (state.isPlaying && state.midiData) {
+        let canAdvance = true;
+        
+        // Calculate advance based on BPM/PPQ
+        // Ticks per second = (BPM * PPQ) / 60
+        const ticksPerSecond = (state.bpm * state.ppq) / 60;
+        const tickAdvance = ticksPerSecond * delta * state.playbackSpeed;
+
+        // WAIT MODE LOGIC
+        if (state.waitMode) {
+            // Check notes arriving soon
+            const tolerance = 50; 
+            const notesAtCurrentTime = state.allNotes.filter(n => 
+                n.startTick >= state.currentTick && 
+                n.startTick < state.currentTick + tickAdvance + tolerance &&
+                !n.played
+            );
+
+            if (notesAtCurrentTime.length > 0) {
+                // Determine earliest start time in this group
+                const nextNoteTick = Math.min(...notesAtCurrentTime.map(n => n.startTick));
+                
+                // If we are basically AT that time
+                if (state.currentTick >= nextNoteTick - 10) {
+                    const requiredNotes = notesAtCurrentTime.filter(n => Math.abs(n.startTick - nextNoteTick) < 10);
+                    
+                    // Check if user is holding required notes
+                    const allPressed = requiredNotes.every(n => state.activeNotes.has(n.note));
+                    
+                    if (!allPressed) {
+                        canAdvance = false;
+                        state.currentTick = nextNoteTick; 
+                    } else {
+                         // Mark valid notes as played to avoid re-triggering logic immediately
+                         requiredNotes.forEach(n => n.played = true);
+                    }
+                }
+            }
+        }
+
+        if (canAdvance) {
+            state.currentTick += tickAdvance;
+            
+            // Audio Playback
+            state.allNotes.forEach(n => {
+                // If note started in this frame
+                if (n.startTick <= state.currentTick && n.startTick > state.currentTick - tickAdvance) {
+                    // Trigger sound if playing normally
+                    // In Wait Mode, if we just passed the check, the user played it, so we might not want to double play?
+                    // Actually, usually app plays backing tracks, user plays melody.
+                    // For simplicity, we play everything unless muted.
+                    if(state.synth && !state.waitMode) {
+                        const durSeconds = (n.durationTicks / ticksPerSecond);
+                        state.synth.triggerAttackRelease(
+                            Tone.Frequency(n.note, "midi").toNote(), 
+                            durSeconds
+                        );
+                    }
+                }
+            });
+        }
+    }
+
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+
+function draw() {
+    // Clear background
+    ctx.fillStyle = '#121212';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (!state.midiData && state.isAudioStarted) {
+        ctx.fillStyle = '#333';
+        ctx.font = '20px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText("No MIDI file loaded", canvas.width/2, canvas.height/2);
+        return;
+    }
+
+    // Drawing Metrics
+    const keyWidth = state.canvasWidth / KEY_COUNT;
+    const pianoHeight = state.canvasHeight * 0.2; 
+    const visualizerHeight = state.canvasHeight - pianoHeight;
+    
+    // Scale
+    const ticksPerSecond = (state.bpm * state.ppq) / 60;
+    const viewDurationTicks = ticksPerSecond * 4; // 4 seconds visible
+    const pixelsPerTick = visualizerHeight / viewDurationTicks;
+
+    if (state.allNotes) {
+        state.allNotes.forEach(note => {
+            const distFromTarget = note.startTick - state.currentTick;
+            const y = visualizerHeight - (distFromTarget * pixelsPerTick);
+            const height = note.durationTicks * pixelsPerTick;
+
+            // Only draw if on screen
+            if (y + height > 0 && y < visualizerHeight) {
+                const x = (note.note - MIN_NOTE) * keyWidth;
+                
+                // Color Logic
+                let color = '#bb86fc'; // Default
+                const isHit = state.activeNotes.has(note.note) && Math.abs(distFromTarget) < 200; 
+                
+                if (isHit) color = '#03dac6'; 
+                if (state.waitMode && distFromTarget < 50 && distFromTarget > -10 && !isHit) {
+                    color = '#cf6679'; // Alert color
+                }
+
+                ctx.fillStyle = color;
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 1;
+                
+                // Draw note
+                ctx.fillRect(x + 1, y - height, keyWidth - 2, height);
+                ctx.strokeRect(x + 1, y - height, keyWidth - 2, height);
+            }
+        });
+    }
+
+    // 2. Draw Piano Keys
+    for (let i = MIN_NOTE; i <= MAX_NOTE; i++) {
+        const x = (i - MIN_NOTE) * keyWidth;
+        const isActive = state.activeNotes.has(i);
+        const isBlack = [1, 3, 6, 8, 10].includes(i % 12);
+        
+        if (isActive) {
+            ctx.fillStyle = '#03dac6'; 
+        } else {
+            ctx.fillStyle = isBlack ? '#1e1e1e' : '#f0f0f0';
+        }
+        
+        ctx.fillRect(x, visualizerHeight, keyWidth - 1, pianoHeight);
+        
+        if (!isBlack && !isActive) {
+            ctx.fillStyle = 'rgba(0,0,0,0.1)';
+            ctx.fillRect(x, visualizerHeight + pianoHeight - 10, keyWidth - 1, 10);
+        }
+    }
+
+    // 3. Draw "Now" Line
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, visualizerHeight);
+    ctx.lineTo(state.canvasWidth, visualizerHeight);
+    ctx.stroke();
+}
+</script>
+</body>
+</html>
